@@ -5,3 +5,5 @@ python-multipart
 google-generativeai
 python-dotenv
 requests
+jpholiday
+reportlab

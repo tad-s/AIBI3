@@ -56,13 +56,15 @@ async def analyze_sales(file: UploadFile = File(...)):
 
     try:
         content = await file.read()
-        # Use analysis_engine to process data
-        df = load_and_process_data(io.BytesIO(content))
+        # Use DataManager to process data
+        from data_manager import DataManager
+        dm = DataManager()
+        df = dm.get_enriched_data(io.BytesIO(content))
         
         # Store for AI agent
         latest_df = df
         
-        # Analyze data
+        # Analyze data (using existing engine for basic stats)
         analysis_result = engine_analyze_sales(df)
         
         # Return the analysis result directly
@@ -83,15 +85,7 @@ async def analyze_query(request: QueryRequest):
         analyst = LLMAnalyst()
         result = analyst.analyze_query(latest_df, request.text)
         
-        # Map result to frontend expected format if needed, or just return as is
-        # The frontend expects: { type, data, x_key, y_key, summary } from the OLD endpoint
-        # BUT the user asked for a NEW endpoint /api/chat_analyze with { answer, data, chartType }
-        # So I will implement the NEW endpoint separately.
-        
-        # For backward compatibility of the existing frontend (until updated), 
-        # I will keep this old endpoint pointing to the old agent or update it.
-        # But the user specifically asked for /api/chat_analyze.
-        
+        # For backward compatibility
         from ai_agent import SalesAnalyst
         analyst_old = SalesAnalyst(latest_df)
         return analyst_old.analyze(request.text)
@@ -117,6 +111,48 @@ async def chat_analyze(request: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Analysis failed: {str(e)}")
 
+@app.get("/api/insights")
+async def get_insights():
+    global latest_df
+    if latest_df is None:
+        raise HTTPException(status_code=400, detail="No data available. Please upload a CSV file first.")
+    
+    try:
+        from insight_engine import InsightEngine
+        engine = InsightEngine()
+        result = engine.generate_proactive_insights(latest_df)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Insight generation failed: {str(e)}")
+
+from fastapi.responses import StreamingResponse
+
+@app.post("/api/generate_pdf")
+async def generate_pdf():
+    global latest_df
+    if latest_df is None:
+        raise HTTPException(status_code=400, detail="No data available. Please upload a CSV file first.")
+    
+    try:
+        # 1. Generate Insights first
+        from insight_engine import InsightEngine
+        insight_engine = InsightEngine()
+        insights_data = insight_engine.generate_proactive_insights(latest_df)
+        
+        # 2. Generate PDF
+        from pdf_generator import PDFGenerator
+        pdf_gen = PDFGenerator()
+        pdf_buffer = pdf_gen.generate_report(latest_df, insights_data)
+        
+        return StreamingResponse(
+            pdf_buffer, 
+            media_type="application/pdf", 
+            headers={"Content-Disposition": "attachment; filename=report.pdf"}
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
 @app.get("/")
 def read_root():
-    return {"message": "Restaurant BI Backend is running (v1.2)"}
+    return {"message": "Restaurant BI Backend is running (v1.4)"}

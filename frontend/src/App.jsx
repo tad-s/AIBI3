@@ -1,8 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { Send, Upload, FileText, Activity } from 'lucide-react';
+import { Send, Upload, FileText, Activity, CloudSun, Calendar, TrendingUp, DollarSign, Download } from 'lucide-react';
 import DynamicChart from './components/DynamicChart';
-
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
 const Dashboard = () => {
   const [messages, setMessages] = useState([
@@ -11,7 +9,20 @@ const Dashboard = () => {
   const [input, setInput] = useState('');
   const [chartConfig, setChartConfig] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [insights, setInsights] = useState(null); // { insights: [], actions: [] }
   const fileInputRef = useRef(null);
+
+  const fetchInsights = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/insights');
+      if (response.ok) {
+        const data = await response.json();
+        setInsights(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch insights:", error);
+    }
+  };
 
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
@@ -53,6 +64,9 @@ const Dashboard = () => {
       { type: 'ai', text: 'アップロード完了。初期分析結果を表示します。何か質問はありますか？（例：「雨の日の売上傾向は？」）' }
       ]);
 
+      // Fetch proactive insights
+      await fetchInsights();
+
     } catch (error) {
       console.error('Error:', error);
       setMessages(prev => [...prev, { type: 'ai', text: 'エラーが発生しました。' }]);
@@ -70,7 +84,6 @@ const Dashboard = () => {
     setLoading(true);
 
     try {
-      // Use the new /api/chat_analyze endpoint with query payload
       const response = await fetch('http://localhost:8000/api/chat_analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -106,6 +119,30 @@ const Dashboard = () => {
     }
   };
 
+  const handleDownloadPDF = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/generate_pdf', {
+        method: 'POST',
+      });
+
+      if (!response.ok) throw new Error('PDF generation failed');
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'business_insight_report.pdf';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+    } catch (error) {
+      console.error('PDF Download Error:', error);
+      alert('PDFレポートの生成に失敗しました。');
+    }
+  };
+
   const handleUploadClick = () => {
     fileInputRef.current?.click();
   };
@@ -114,10 +151,20 @@ const Dashboard = () => {
     <div className="flex h-screen bg-gray-100 font-sans">
       {/* Left: Chat Panel */}
       <div className="w-1/3 bg-white border-r border-gray-200 flex flex-col">
-        <div className="p-4 border-b border-gray-200 bg-blue-600 text-white flex items-center gap-2">
-          <Activity size={20} />
-          <h1 className="font-bold text-lg">AI Data Analyst</h1>
+        <div className="p-4 border-b border-gray-200 bg-blue-600 text-white flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Activity size={20} />
+            <h1 className="font-bold text-lg">AI Data Analyst</h1>
+          </div>
+          {/* Data Source Icons */}
+          <div className="flex gap-2">
+            <CloudSun size={16} className="text-blue-200" title="Weather Data" />
+            <Calendar size={16} className="text-blue-200" title="Calendar/Events" />
+            <TrendingUp size={16} className="text-blue-200" title="Trends" />
+            <DollarSign size={16} className="text-blue-200" title="Sales Data" />
+          </div>
         </div>
+
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((msg, i) => (
             <div key={i} className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -129,6 +176,7 @@ const Dashboard = () => {
           ))}
           {loading && <div className="text-gray-400 text-sm animate-pulse">AIが分析中...</div>}
         </div>
+
         <div className="p-4 border-t border-gray-200">
           <div className="flex gap-2 mb-2">
             <input
@@ -162,11 +210,52 @@ const Dashboard = () => {
       </div>
 
       {/* Right: Visualization Panel */}
-      <div className="w-2/3 p-6 overflow-y-auto">
-        <div className="bg-white p-6 rounded-xl shadow-sm mb-6 h-[600px] flex flex-col relative">
+      <div className="w-2/3 p-6 overflow-y-auto flex flex-col gap-6">
+
+        {/* Header with PDF Button */}
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
+          <button
+            onClick={handleDownloadPDF}
+            disabled={!chartConfig}
+            className={`flex items-center gap-2 px-4 py-2 rounded text-white text-sm font-medium transition-colors ${chartConfig ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-300 cursor-not-allowed'
+              }`}
+          >
+            <Download size={16} /> PDF Report
+          </button>
+        </div>
+
+        {/* AI Daily Insights Section */}
+        {insights && (
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-blue-500">
+              <h3 className="font-bold text-gray-700 mb-2 flex items-center gap-2">
+                <Activity size={18} className="text-blue-500" /> 今日の気づき (Insights)
+              </h3>
+              <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+                {insights.insights.map((insight, i) => (
+                  <li key={i}>{insight}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-green-500">
+              <h3 className="font-bold text-gray-700 mb-2 flex items-center gap-2">
+                <TrendingUp size={18} className="text-green-500" /> 推奨アクション (Actions)
+              </h3>
+              <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+                {insights.actions.map((action, i) => (
+                  <li key={i}>{action}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* Chart Section */}
+        <div className="bg-white p-6 rounded-xl shadow-sm h-[500px] flex flex-col relative">
           <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
             <Activity className="text-blue-500" />
-            Real-time Analysis Dashboard
+            Real-time Analysis
           </h2>
 
           {loading && (
@@ -192,7 +281,7 @@ const Dashboard = () => {
             </div>
           ) : (
             <div className="flex-1 flex items-center justify-center bg-gray-50 rounded border border-dashed border-gray-300 text-gray-400">
-              ここに分析結果のグラフが表示されます
+              CSVをアップロードして分析を開始してください
             </div>
           )}
         </div>
