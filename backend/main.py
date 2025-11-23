@@ -1,10 +1,30 @@
-import pandas as pd
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Check API Key status
+api_key = os.getenv("GOOGLE_API_KEY")
+if api_key:
+    print(f"INFO: GOOGLE_API_KEY found: {api_key[:4]}...{api_key[-4:]}")
+else:
+    print("WARNING: GOOGLE_API_KEY not found in environment variables.")
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import random
 
+from analysis_engine import load_and_process_data, analyze_sales as engine_analyze_sales
+
+from pydantic import BaseModel
+from ai_agent import SalesAnalyst
+
 app = FastAPI()
+
+# Global variable to store the latest dataframe (MVP solution)
+latest_df = None
 
 # CORS configuration
 origins = [
@@ -20,54 +40,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mock data constants
-WEATHER_CONDITIONS = ["Sunny", "Rainy", "Cloudy"]
-EVENTS = ["Local Festival", "Concert", "Sports Match", "None"]
-TRENDS = ["#Pancakes", "#SpicyFood", "#Healthy", "#Tapioca", "None"]
-
-def generate_mock_data(num_rows):
-    """Generates mock data for weather, events, and trends."""
-    weather_data = []
-    event_data = []
-    trend_data = []
-
-    for _ in range(num_rows):
-        # Weather: Condition + Random Temperature (15-30)
-        condition = random.choice(WEATHER_CONDITIONS)
-        temp = random.randint(15, 30)
-        weather_data.append(f"{condition} ({temp}C)")
-        
-        # Event and Trend
-        event_data.append(random.choice(EVENTS))
-        trend_data.append(random.choice(TRENDS))
-    
-    return weather_data, event_data, trend_data
+class QueryRequest(BaseModel):
+    text: str
 
 @app.post("/api/analyze")
 async def analyze_sales(file: UploadFile = File(...)):
+    global latest_df
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="Invalid file format. Please upload a CSV file.")
 
     try:
         content = await file.read()
-        df = pd.read_csv(io.BytesIO(content))
+        # Use analysis_engine to process data
+        df = load_and_process_data(io.BytesIO(content))
         
-        # Generate mock data matching the number of rows in the CSV
-        weather, events, trends = generate_mock_data(len(df))
+        # Store for AI agent
+        latest_df = df
         
-        # Append mock data to DataFrame
-        df['Weather'] = weather
-        df['Event'] = events
-        df['Trend'] = trends
+        # Analyze data
+        analysis_result = engine_analyze_sales(df)
         
-        # Convert to JSON compatible format (list of dicts)
-        result = df.to_dict(orient='records')
-        
-        return {"data": result}
+        # Return the analysis result directly
+        return {"data": analysis_result}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
+@app.post("/api/analyze_query")
+async def analyze_query(request: QueryRequest):
+    global latest_df
+    if latest_df is None:
+        raise HTTPException(status_code=400, detail="No data available. Please upload a CSV file first.")
+    
+    try:
+        analyst = SalesAnalyst(latest_df)
+        result = analyst.analyze(request.text)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI Analysis failed: {str(e)}")
+
 @app.get("/")
 def read_root():
-    return {"message": "Restaurant BI Backend is running"}
+    return {"message": "Restaurant BI Backend is running (v1.2)"}

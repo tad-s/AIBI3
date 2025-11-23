@@ -3,22 +3,23 @@ import random
 import datetime
 import os
 
-def load_and_process_data(file_path):
+def load_and_process_data(source):
     """
     CSVファイルを読み込み、データ処理と拡張を行う関数。
     
     Args:
-        file_path (str): CSVファイルのパス
+        source (str or file-like): CSVファイルのパス または ファイルオブジェクト
         
     Returns:
         pd.DataFrame: 処理済みのDataFrame
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"指定されたファイルが見つかりません: {file_path}")
+    if isinstance(source, str):
+        if not os.path.exists(source):
+            raise FileNotFoundError(f"指定されたファイルが見つかりません: {source}")
 
     try:
         # CSVを読み込む
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(source)
         
         # 必須カラムの確認
         if '注文日時' not in df.columns:
@@ -47,14 +48,19 @@ def load_and_process_data(file_path):
                 # イベントフラグの付与 (9/14, 9/21)
                 is_event_day = (date.day == 14 or date.day == 21)
                 event_flag = 1 if is_event_day else 0
+
+                # トレンドスコアの付与 (0-100)
+                trend_score = random.randint(30, 90)
+                if is_event_day:
+                    trend_score += 10 # イベント日はトレンドも高いとする
                 
-                return pd.Series([weather, temp, event_flag])
+                return pd.Series([weather, temp, event_flag, trend_score])
             else:
                 # 対象外の日付はデフォルト値またはNone
-                return pd.Series([None, None, 0])
+                return pd.Series([None, None, 0, 0])
 
         # 新しいカラムを追加
-        df[['天気', '気温', 'イベントあり']] = df.apply(augment_row, axis=1)
+        df[['天気', '気温', 'イベントあり', 'トレンドスコア']] = df.apply(augment_row, axis=1)
         
         return df
 
@@ -72,10 +78,16 @@ def analyze_sales(df):
         dict: 分析結果を含む辞書
     """
     try:
-        # 売上カラムの特定（PriceまたはAmountなどを想定）
-        sales_col = 'Price' if 'Price' in df.columns else '売上'
-        if sales_col not in df.columns:
-             raise ValueError(f"売上データのカラム（{sales_col}）が見つかりません。")
+        # 売上カラムの特定と計算
+        if '単価（税込）' in df.columns and '数量' in df.columns:
+            df['売上'] = df['単価（税込）'] * df['数量']
+            sales_col = '売上'
+        elif 'Price' in df.columns:
+            sales_col = 'Price'
+        elif '売上' in df.columns:
+            sales_col = '売上'
+        else:
+             raise ValueError("売上データのカラム（単価（税込）+数量, Price, 売上）が見つかりません。")
 
         # 日付カラムの作成（集計用）
         df['日付'] = df['注文日時'].dt.date
@@ -83,13 +95,18 @@ def analyze_sales(df):
         # 1. 日別の集計
         # 売上合計
         daily_sales = df.groupby('日付')[sales_col].sum()
-        # 客数（行数を客数と仮定）
-        daily_customers = df.groupby('日付').size()
+        # 客数（注文番号のユニーク数、なければ行数）
+        if '注文番号' in df.columns:
+            daily_customers = df.groupby('日付')['注文番号'].nunique()
+        else:
+            daily_customers = df.groupby('日付').size()
         
         # DataFrameにまとめて計算
         daily_stats = pd.DataFrame({
             'total_sales': daily_sales,
-            'customer_count': daily_customers
+            'customer_count': daily_customers,
+            'avg_trend': df.groupby('日付')['トレンドスコア'].mean(),
+            'has_event': df.groupby('日付')['イベントあり'].max()
         })
         
         # 客単価 = 売上合計 / 客数

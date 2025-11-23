@@ -1,43 +1,196 @@
-import React, { useState, useEffect } from 'react';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart } from 'recharts';
+import React, { useState, useRef } from 'react';
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart } from 'recharts';
 import { Send, Upload, FileText, Activity } from 'lucide-react';
+
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
+
+const DynamicChart = ({ type, data, xKey, yKey }) => {
+  if (!data || data.length === 0) return <div className="text-gray-400">データがありません</div>;
+
+  if (type === 'bar') {
+    return (
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey={xKey} />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Bar dataKey={yKey} fill="#3b82f6" name={yKey} />
+        </BarChart>
+      </ResponsiveContainer>
+    );
+  }
+
+  if (type === 'line') {
+    return (
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey={xKey} />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Line type="monotone" dataKey={yKey} stroke="#8884d8" strokeWidth={2} />
+        </LineChart>
+      </ResponsiveContainer>
+    );
+  }
+
+  if (type === 'pie') {
+    return (
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            labelLine={false}
+            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+            outerRadius={120}
+            fill="#8884d8"
+            dataKey={yKey}
+            nameKey={xKey}
+          >
+            {data.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+            ))}
+          </Pie>
+          <Tooltip />
+          <Legend />
+        </PieChart>
+      </ResponsiveContainer>
+    );
+  }
+
+  // Default or Table
+  return (
+    <div className="overflow-auto h-full">
+      <table className="min-w-full bg-white border">
+        <thead>
+          <tr>
+            {Object.keys(data[0]).map(key => (
+              <th key={key} className="py-2 px-4 border-b">{key}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row, i) => (
+            <tr key={i}>
+              {Object.values(row).map((val, j) => (
+                <td key={j} className="py-2 px-4 border-b text-center">{val}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
 const Dashboard = () => {
   const [messages, setMessages] = useState([
     { type: 'ai', text: 'こんにちは。売上データの分析を開始しますか？ CSVファイルをアップロードするか、指示を入力してください。' }
   ]);
   const [input, setInput] = useState('');
-  const [chartData, setChartData] = useState(null);
+  const [chartConfig, setChartConfig] = useState(null);
   const [loading, setLoading] = useState(false);
+  const fileInputRef = useRef(null);
 
-  // デモ用データロード処理 (本来はAPIから取得)
-  const handleAnalyze = () => {
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
     setLoading(true);
-    // バックエンドAPIコールのシミュレーション
-    setTimeout(() => {
-      setLoading(false);
-      setChartData([
-        { date: '9/01', sales: 450000, trend: 42, event: null },
-        { date: '9/02', sales: 420000, trend: 43, event: null },
-        { date: '9/14', sales: 850000, trend: 60, event: 'Concert' }, // Event spike
-        { date: '9/21', sales: 920000, trend: 75, event: 'Soccer' },  // Event spike
-        { date: '9/30', sales: 500000, trend: 88, event: null },
-      ]);
+    setMessages(prev => [...prev, { type: 'user', text: `ファイルをアップロード中: ${file.name}` }]);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/analyze', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error('Upload failed');
+
+      const result = await response.json();
+
+      // Initial view: Daily Sales Bar Chart
+      const formattedData = result.data.daily_analysis.map(item => ({
+        date: item.日付,
+        sales: item.total_sales,
+        trend: Math.round(item.avg_trend),
+        event: item.has_event === 1 ? 'Event' : null
+      }));
+
+      setChartConfig({
+        type: 'bar',
+        data: formattedData,
+        x_key: 'date',
+        y_key: 'sales',
+        summary: 'データ分析が完了しました。イベント日やトレンドスコアとの相関をご確認ください。'
+      });
+
       setMessages(prev => [...prev,
-      { type: 'ai', text: '分析が完了しました。9/14と9/21のイベント開催日に顕著な売上増が見られます。右側のグラフをご確認ください。' }
+      { type: 'ai', text: 'アップロード完了。初期分析結果を表示します。何か質問はありますか？（例：「雨の日の売上傾向は？」）' }
       ]);
-    }, 1500);
+
+    } catch (error) {
+      console.error('Error:', error);
+      setMessages(prev => [...prev, { type: 'ai', text: 'エラーが発生しました。' }]);
+    } finally {
+      setLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim()) return;
-    setMessages([...messages, { type: 'user', text: input }]);
+    const userText = input;
+    setMessages(prev => [...prev, { type: 'user', text: userText }]);
     setInput('');
-    if (input.includes('分析') || input.includes('グラフ')) {
-      handleAnalyze();
-    } else {
-      setTimeout(() => setMessages(prev => [...prev, { type: 'ai', text: '承知しました。その観点でデータを集計します（デモ）。' }]), 1000);
+    setLoading(true);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/analyze_query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: userText }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || 'Analysis failed');
+      }
+
+      const result = await response.json();
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      setChartConfig({
+        type: result.type,
+        data: result.data,
+        x_key: result.x_key,
+        y_key: result.y_key,
+        summary: result.summary
+      });
+
+      setMessages(prev => [...prev, { type: 'ai', text: result.summary }]);
+
+    } catch (error) {
+      console.error('Error:', error);
+      setMessages(prev => [...prev, { type: 'ai', text: `申し訳ありません。分析中にエラーが発生しました: ${error.message}` }]);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
   };
 
   return (
@@ -61,11 +214,18 @@ const Dashboard = () => {
         </div>
         <div className="p-4 border-t border-gray-200">
           <div className="flex gap-2 mb-2">
-            <button className="flex-1 flex items-center justify-center gap-2 p-2 bg-gray-100 rounded hover:bg-gray-200 text-sm text-gray-600">
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileUpload}
+              accept=".csv"
+              className="hidden"
+            />
+            <button
+              onClick={handleUploadClick}
+              className="flex-1 flex items-center justify-center gap-2 p-2 bg-gray-100 rounded hover:bg-gray-200 text-sm text-gray-600"
+            >
               <Upload size={16} /> CSV Upload
-            </button>
-            <button className="flex-1 flex items-center justify-center gap-2 p-2 bg-gray-100 rounded hover:bg-gray-200 text-sm text-gray-600">
-              <FileText size={16} /> PDF Report
             </button>
           </div>
           <div className="flex gap-2">
@@ -73,6 +233,7 @@ const Dashboard = () => {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
               className="flex-1 border border-gray-300 rounded p-2 focus:outline-none focus:border-blue-500"
               placeholder="例: 雨の日の売上傾向を教えて..."
             />
@@ -85,32 +246,26 @@ const Dashboard = () => {
 
       {/* Right: Visualization Panel */}
       <div className="w-2/3 p-6 overflow-y-auto">
-        <div className="bg-white p-6 rounded-xl shadow-sm mb-6">
+        <div className="bg-white p-6 rounded-xl shadow-sm mb-6 h-[600px] flex flex-col">
           <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
             <Activity className="text-blue-500" />
             Real-time Analysis Dashboard
           </h2>
 
-          {chartData ? (
-            <div className="h-[400px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.5} />
-                  <XAxis dataKey="date" />
-                  <YAxis yAxisId="left" label={{ value: 'Sales (JPY)', angle: -90, position: 'insideLeft' }} />
-                  <YAxis yAxisId="right" orientation="right" label={{ value: 'Trend Score', angle: 90, position: 'insideRight' }} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar yAxisId="left" dataKey="sales" fill="#3b82f6" name="Sales" radius={[4, 4, 0, 0]} />
-                  <Line yAxisId="right" type="monotone" dataKey="trend" stroke="#f97316" name="Trend Score" strokeWidth={2} />
-                </ComposedChart>
-              </ResponsiveContainer>
+          {chartConfig ? (
+            <div className="flex-1 w-full min-h-0">
+              <DynamicChart
+                type={chartConfig.type}
+                data={chartConfig.data}
+                xKey={chartConfig.x_key}
+                yKey={chartConfig.y_key}
+              />
               <div className="mt-4 bg-yellow-50 border-l-4 border-yellow-400 p-4 text-sm text-yellow-800">
-                <strong>💡 AI Insight:</strong> イベント開催日（9/14, 9/21）の売上が平均の2倍以上に達しています。次回のイベント日に向けて在庫を20%増やすことを推奨します。
+                <strong>💡 AI Insight:</strong> {chartConfig.summary}
               </div>
             </div>
           ) : (
-            <div className="h-[400px] flex items-center justify-center bg-gray-50 rounded border border-dashed border-gray-300 text-gray-400">
+            <div className="flex-1 flex items-center justify-center bg-gray-50 rounded border border-dashed border-gray-300 text-gray-400">
               ここに分析結果のグラフが表示されます
             </div>
           )}
