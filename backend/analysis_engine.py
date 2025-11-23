@@ -32,36 +32,68 @@ def load_and_process_data(source):
         # 「注文日時」をdatetime型に変換
         df['注文日時'] = pd.to_datetime(df['注文日時'])
         
-        # シミュレーション用データの生成
+        # シミュレーション用データの生成（フォールバック用）
         weather_conditions = ['晴れ', '雨', '曇り']
+
+        # 店舗情報の取得（最初の行から取得）
+        store_name = "東京" # デフォルト
+        if '店舗名' in df.columns and not df['店舗名'].isnull().all():
+            store_name = df['店舗名'].iloc[0]
         
-        # 行ごとにループしてデータを付与（ベクトル処理も可能だが、条件分岐が複雑なためapplyまたはループを使用）
+        # 座標の取得
+        from external_services import get_location, get_weather_data
+        lat, lon = None, None
+        try:
+            coords = get_location(store_name)
+            if coords:
+                lat, lon = coords
+                print(f"Coordinates found for {store_name}: {lat}, {lon}")
+            else:
+                print(f"Coordinates not found for {store_name}, using fallback.")
+        except Exception as e:
+            print(f"Error getting coordinates: {e}")
+
+        # 日付ごとの天気データを取得（APIコール数削減のため）
+        unique_dates = df['注文日時'].dt.date.unique()
+        weather_cache = {}
+
+        for d in unique_dates:
+            # datetimeオブジェクトに変換（時間は正午とする）
+            dt = datetime.datetime.combine(d, datetime.time(12, 0))
+            
+            # get_weather_dataはエラー時にダミーデータを返すので、そのまま使用
+            if lat is not None and lon is not None:
+                weather_info = get_weather_data(lat, lon, dt)
+            else:
+                # 座標がない場合もダミーデータを使用（get_weather_dataのダミーと同じ形式で）
+                weather_info = {"weather": "晴れ", "temp": 25}
+            
+            weather_cache[d] = weather_info
+
+        # 行ごとにデータを付与
         def augment_row(row):
             date = row['注文日時']
+            d = date.date()
             
-            # 2025年9月の日付に対する処理
-            if date.year == 2025 and date.month == 9:
-                # 天気と気温のランダム生成
-                weather = random.choice(weather_conditions)
-                temp = random.randint(20, 35)
-                
-                # イベントフラグの付与 (9/14, 9/21)
-                is_event_day = (date.day == 14 or date.day == 21)
-                event_flag = 1 if is_event_day else 0
+            # 天気・気温 (キャッシュから取得)
+            w_info = weather_cache.get(d, {"weather": "晴れ", "temp": 25})
+            weather = w_info['weather']
+            temp = w_info['temp']
 
-                # トレンドスコアの付与 (0-100)
-                trend_score = random.randint(30, 90)
-                if is_event_day:
-                    trend_score += 10 # イベント日はトレンドも高いとする
-                
-                return pd.Series([weather, temp, event_flag, trend_score])
-            else:
-                # 対象外の日付はデフォルト値またはNone
-                return pd.Series([None, None, 0, 0])
+            # イベントフラグの付与 (9/14, 9/21)
+            is_event_day = (date.day == 14 or date.day == 21)
+            event_flag = 1 if is_event_day else 0
+
+            # トレンドスコアの付与 (0-100)
+            trend_score = random.randint(30, 90)
+            if is_event_day:
+                trend_score += 10 # イベント日はトレンドも高いとする
+
+            return pd.Series([weather, temp, event_flag, trend_score])
 
         # 新しいカラムを追加
         df[['天気', '気温', 'イベントあり', 'トレンドスコア']] = df.apply(augment_row, axis=1)
-        
+
         return df
 
     except Exception as e:
@@ -144,3 +176,97 @@ def analyze_sales(df):
 
     except Exception as e:
         raise RuntimeError(f"データ分析中にエラーが発生しました: {str(e)}")
+
+import google.generativeai as genai
+import io
+from config import Config
+
+class LLMAnalyst:
+    def __init__(self):
+        if Config.GOOGLE_API_KEY:
+            genai.configure(api_key=Config.GOOGLE_API_KEY)
+            self.model = genai.GenerativeModel('gemini-flash-latest')
+        else:
+            self.model = None
+            print("Warning: GOOGLE_API_KEY not configured for LLMAnalyst.")
+
+    def analyze_query(self, df, user_query):
+        """
+        ユーザーの質問に基づいてDataFrameを分析するコードを生成・実行する。
+        """
+        if not self.model:
+            return {
+                "answer": "APIキーが設定されていないため、AI分析を利用できません。",
+                "data": [],
+                "chartType": "bar"
+            }
+
+        # カラム情報の取得
+        buffer = io.StringIO()
+        df.info(buf=buffer)
+        columns_info = buffer.getvalue()
+
+        # プロンプトの作成
+        prompt = f"""
+        あなたはデータアナリストです。以下のDataFrameのカラム情報 `{columns_info}` を元に、
+        ユーザーの質問 `{user_query}` に答えるためのPython Pandasコードのみを生成してください。
+        
+        要件:
+        1. コードは `df` 変数を直接使用してください。
+        2. 分析結果（集計データ）は `result_df` という変数に格納してください。
+           - `result_df` は、グラフ化しやすいように reset_index() などを適宜行ってください。
+        3. グラフの種類を `chart_type` 変数（文字列: 'bar', 'line', 'pie', 'scatter'）に格納してください。
+        4. グラフのX軸に使用するカラム名を `x_key` 変数（文字列）に格納してください。
+        5. グラフのY軸に使用するカラム名を `y_key` 変数（文字列）に格納してください。
+        6. 分析結果の要約コメントを `summary_text` 変数（文字列）に格納してください。
+        7. コードのみを出力し、Markdownのバッククォートは含めないでください。
+        """
+
+        try:
+            response = self.model.generate_content(prompt)
+            generated_code = response.text.strip()
+            
+            # Markdown除去
+            generated_code = generated_code.replace("```python", "").replace("```", "")
+            
+            print(f"Generated Code:\n{generated_code}")
+
+            # コード実行
+            local_vars = {'df': df, 'pd': pd}
+            exec(generated_code, {}, local_vars)
+            
+            result_df = local_vars.get('result_df')
+            chart_type = local_vars.get('chart_type', 'bar')
+            x_key = local_vars.get('x_key', '')
+            y_key = local_vars.get('y_key', '')
+            summary_text = local_vars.get('summary_text', '分析が完了しました。')
+
+            # 結果の整形
+            if result_df is not None:
+                # datetime型などをJSONシリアライズ可能にする
+                if '日付' in result_df.columns:
+                    result_df['日付'] = result_df['日付'].astype(str)
+                
+                # 全てのTimestamp型を文字列に変換
+                for col in result_df.select_dtypes(include=['datetime', 'datetimetz']).columns:
+                    result_df[col] = result_df[col].astype(str)
+
+                data_list = result_df.to_dict(orient='records')
+            else:
+                data_list = []
+
+            return {
+                "answer": summary_text,
+                "data": data_list,
+                "chartType": chart_type,
+                "xKey": x_key,
+                "yKey": y_key
+            }
+
+        except Exception as e:
+            print(f"LLM Analysis Error: {e}")
+            return {
+                "answer": f"分析中にエラーが発生しました: {str(e)}",
+                "data": [],
+                "chartType": "bar"
+            }

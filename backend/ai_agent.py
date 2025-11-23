@@ -17,7 +17,7 @@ class SalesAnalyst:
             print("Warning: GOOGLE_API_KEY environment variable not found.")
         else:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-pro')
+            self.model = genai.GenerativeModel('gemini-flash-latest')
 
     def analyze(self, query: str) -> dict:
         """

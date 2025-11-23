@@ -1,92 +1,8 @@
 import React, { useState, useRef } from 'react';
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart } from 'recharts';
 import { Send, Upload, FileText, Activity } from 'lucide-react';
+import DynamicChart from './components/DynamicChart';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
-
-const DynamicChart = ({ type, data, xKey, yKey }) => {
-  if (!data || data.length === 0) return <div className="text-gray-400">データがありません</div>;
-
-  if (type === 'bar') {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={xKey} />
-          <YAxis />
-          <Tooltip />
-          <Legend />
-          <Bar dataKey={yKey} fill="#3b82f6" name={yKey} />
-        </BarChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (type === 'line') {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={xKey} />
-          <YAxis />
-          <Tooltip />
-          <Legend />
-          <Line type="monotone" dataKey={yKey} stroke="#8884d8" strokeWidth={2} />
-        </LineChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (type === 'pie') {
-    return (
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie
-            data={data}
-            cx="50%"
-            cy="50%"
-            labelLine={false}
-            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-            outerRadius={120}
-            fill="#8884d8"
-            dataKey={yKey}
-            nameKey={xKey}
-          >
-            {data.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-            ))}
-          </Pie>
-          <Tooltip />
-          <Legend />
-        </PieChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  // Default or Table
-  return (
-    <div className="overflow-auto h-full">
-      <table className="min-w-full bg-white border">
-        <thead>
-          <tr>
-            {Object.keys(data[0]).map(key => (
-              <th key={key} className="py-2 px-4 border-b">{key}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row, i) => (
-            <tr key={i}>
-              {Object.values(row).map((val, j) => (
-                <td key={j} className="py-2 px-4 border-b text-center">{val}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-};
 
 const Dashboard = () => {
   const [messages, setMessages] = useState([
@@ -146,7 +62,7 @@ const Dashboard = () => {
     }
   };
 
-  const handleSend = async () => {
+  const handleAnalyze = async () => {
     if (!input.trim()) return;
     const userText = input;
     setMessages(prev => [...prev, { type: 'user', text: userText }]);
@@ -154,10 +70,11 @@ const Dashboard = () => {
     setLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/analyze_query', {
+      // Use the new /api/chat_analyze endpoint with query payload
+      const response = await fetch('http://localhost:8000/api/chat_analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: userText }),
+        body: JSON.stringify({ query: userText }),
       });
 
       if (!response.ok) {
@@ -172,14 +89,14 @@ const Dashboard = () => {
       }
 
       setChartConfig({
-        type: result.type,
+        type: result.chartType,
         data: result.data,
-        x_key: result.x_key,
-        y_key: result.y_key,
-        summary: result.summary
+        x_key: result.xKey,
+        y_key: result.yKey,
+        summary: result.answer
       });
 
-      setMessages(prev => [...prev, { type: 'ai', text: result.summary }]);
+      setMessages(prev => [...prev, { type: 'ai', text: result.answer }]);
 
     } catch (error) {
       console.error('Error:', error);
@@ -233,11 +150,11 @@ const Dashboard = () => {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+              onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
               className="flex-1 border border-gray-300 rounded p-2 focus:outline-none focus:border-blue-500"
               placeholder="例: 雨の日の売上傾向を教えて..."
             />
-            <button onClick={handleSend} className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700">
+            <button onClick={handleAnalyze} className="bg-blue-600 text-white p-2 rounded hover:bg-blue-700">
               <Send size={20} />
             </button>
           </div>
@@ -246,11 +163,20 @@ const Dashboard = () => {
 
       {/* Right: Visualization Panel */}
       <div className="w-2/3 p-6 overflow-y-auto">
-        <div className="bg-white p-6 rounded-xl shadow-sm mb-6 h-[600px] flex flex-col">
+        <div className="bg-white p-6 rounded-xl shadow-sm mb-6 h-[600px] flex flex-col relative">
           <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
             <Activity className="text-blue-500" />
             Real-time Analysis Dashboard
           </h2>
+
+          {loading && (
+            <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-10 rounded-xl">
+              <div className="flex flex-col items-center gap-2">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
+                <span className="text-blue-600 font-medium">AIが分析中...</span>
+              </div>
+            </div>
+          )}
 
           {chartConfig ? (
             <div className="flex-1 w-full min-h-0">
